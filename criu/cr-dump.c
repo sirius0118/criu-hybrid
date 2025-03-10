@@ -88,6 +88,19 @@
 #include "asm/dump.h"
 #include "timer.h"
 #include "sigact.h"
+#ifdef DOCKER
+#include "cr-sync.h"
+#include "RDMA.h"
+#include "common/shregion.h"
+#include <string.h>
+
+extern long remain_mem;
+extern long all_mem;
+long remain_mem = 1;
+long all_mem = 1;
+extern int item_num;
+int item_num = 0;
+#endif
 
 /*
  * Architectures can overwrite this function to restore register sets that
@@ -2023,7 +2036,7 @@ static int cr_lazy_mem_dump(void)
 	return ret;
 }
 
-static int cr_dump_finish(int ret)
+static int cr_dump_finish(int ret, int fd1, int fd2)
 {
 	int post_dump_ret = 0;
 
@@ -2082,7 +2095,9 @@ static int cr_dump_finish(int ret)
 		delete_link_remaps();
 		clean_cr_time_mounts();
 	}
-
+	pr_warn("更新状态\n");
+	update_state(fd1, END_PROCESS_DUMP);
+	update_state(fd2, END_PROCESS_DUMP);
 	if (!ret && opts.lazy_pages)
 		ret = cr_lazy_mem_dump();
 
@@ -2123,6 +2138,118 @@ int cr_dump_tasks(pid_t pid)
 	struct pstree_item *item;
 	int pre_dump_ret = 0;
 	int ret = -1;
+
+	int fork_pid = 0, status;
+	int pre_item = 0, item_i = 0, i;
+	int sync_fd_restore = 0;
+	int sync_fd_PC = 0, sync_pretransfer;
+	char *contents;
+	// char sync_addr[50]="10.0.0.63";
+	// int sync_port=4567;
+	u32 cgidd;
+	FILE *fp;
+	char img_path[50];
+	char path[100];
+	char path1[100];
+	char parent_path[100];
+
+	log_set_loglevel(5);
+	if (log_init("/var/lib/criu/dump.log") == -1) {
+		pr_perror("Can't initiate log");
+		goto err;
+	}
+	pr_info("work_dir:%s, imgs_dir:%s\n", opts.work_dir, opts.imgs_dir);
+	sprintf(path1, "%s/psroot", opts.imgs_dir);
+	fp = fopen(path1, "w");
+	sprintf(img_path, "%s", opts.imgs_dir);
+	fprintf(fp, "%d\n", pid);
+	fclose(fp);
+	pr_info("Write psroot file.\n");
+	pr_info("Set sync server. Listening %s:%d\n", opts.sync_addr, opts.sync_port);
+
+	sync_fd_restore = syncServerInit(opts.sync_addr, opts.sync_port);
+	if (sync_fd_restore <= 0)
+		pr_err("Create sync server failed.\n");
+	else
+		pr_info("Create sync server successful.\n");
+	ret = install_service_fd(CRIU_SYNC_FD, sync_fd_restore);
+
+	pr_warn("Try connect to %s:%d\n", opts.sync_addr, opts.port);
+	sync_fd_PC = syncServerInit(opts.sync_addr, opts.port);
+	pr_warn("Try connect to %s:%d\n", opts.sync_addr, opts.port);
+	// sync_pretransfer = syncServerInit(opts.sync_addr, opts.port + 1);
+	sync_pretransfer = sync_fd_PC;
+	if (sync_fd_PC <= 0 || sync_pretransfer <= 0)
+		pr_err("Create page-client failed.\n");
+	else
+		pr_info("Create sync server successful.\n");
+	
+	// ------------------ Pre-copy ---------------------------------
+	opts.lazy_pages = false;
+	while(item_i++ < 5 && (double)remain_mem / (double)all_mem > 0.1){
+
+		pr_warn("开始第%d轮pre-dump, 剩余 %.2lf%%内存.\n", item_i, (double)remain_mem / (double)all_mem * 100);
+		remain_mem = 1; 
+		all_mem = 1;
+
+		if (item_i == 1){
+			opts.img_parent = NULL;
+			sprintf(path, "%s/images", img_path);
+			if(mkdir(path, 0555) < 0){
+				pr_err("Can not create parent images directory: %s.\n", path);
+			}
+			sprintf(path, "%s/images/pre%d", img_path, item_i);
+			if(mkdir(path, 0555) < 0){
+				pr_err("Can not create pre item images directory: %s.\n", path);
+			}
+			opts.imgs_dir = path;
+			if (open_image_dir(opts.imgs_dir, -1) < 0) {
+				pr_err("Can't open images directory");
+				goto err;
+			}
+		}
+		else{
+			sprintf(path, "%s/images/pre%d", img_path, item_i);
+			if(mkdir(path, 0555) < 0){
+				pr_err("Can not create pre item images directory: %s.\n", path);
+			}
+			opts.imgs_dir = path;
+			sprintf(parent_path, "../pre%d", item_i - 1);
+			opts.img_parent = parent_path;
+			if (open_image_dir(opts.imgs_dir, -1) < 0) {
+				pr_err("Can't open images directory");
+				goto err;
+			}
+		}
+		opts.track_mem = true;
+		opts.pre_dump_mode = PRE_DUMP_READ;
+
+		fork_pid = fork();
+		if (fork_pid == 0){
+			ret = cr_pre_dump_tasks(pid);
+			pr_warn("Predump proecess Done.\n");
+			exit(ret);
+		}
+
+		if (waitpid(fork_pid, &status, 0) != fork_pid) {
+			pr_perror("Unable to wait %d", fork_pid);
+			goto err;
+		}
+	}
+
+	// -------------------------------- Post copy --------------------------------------
+	sleep(1);
+	pr_warn("开始post-copy\n");
+	opts.imgs_dir = img_path;
+	opts.lazy_pages = true;
+	opts.track_mem = true;
+	sprintf(parent_path, "./images/pre%d", item_i-1);
+	opts.img_parent = parent_path;
+	if (open_image_dir(opts.imgs_dir, -1) < 0) {
+		pr_err("Can't open images directory: %s\n", opts.imgs_dir);
+		goto err;
+	}
+	
 
 	pr_info("========================================\n");
 	pr_info("Dumping processes (pid: %d comm: %s)\n", pid, __task_comm_info(pid));
@@ -2308,5 +2435,6 @@ err:
 	if (parent_ie)
 		inventory_entry__free_unpacked(parent_ie, NULL);
 
-	return cr_dump_finish(ret);
+	ret = cr_dump_finish(ret, sync_fd_restore, sync_fd_PC);
+	return ret;
 }
