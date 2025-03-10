@@ -1559,7 +1559,9 @@ int epoll_run_rfds(int epollfd, struct epoll_event *evs, int nr_fds, int timeout
 			events = evs[i].events;
 
 			if (events & EPOLLIN) {
+				pr_warn("执行到这\n");
 				ret = rfd->read_event(rfd);
+				pr_warn("执行到这\n");
 				if (ret < 0)
 					goto out;
 				if (ret > 0)

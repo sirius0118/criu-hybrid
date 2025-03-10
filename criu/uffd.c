@@ -66,6 +66,17 @@ extern int page_server_sk;
 
 #define LAZY_PAGES_RESTORE_FINISHED 0x52535446 /* ReSTore Finished */
 
+static inline int __send(int sk, const void *buf, size_t sz, int fl)
+{
+	// return opts.tls ? tls_send(buf, sz, fl) : send(sk, buf, sz, fl);
+	return rsend(sk, buf, sz, fl);
+}
+
+static inline int __recv(int sk, void *buf, size_t sz, int fl)
+{
+	// return opts.tls ? tls_recv(buf, sz, fl) : recv(sk, buf, sz, fl);
+	return rrecv(sk, buf, sz, fl);
+}
 /*
  * Background transfer parameters.
  * The default xfer length is arbitrary set to 64Kbytes
@@ -972,17 +983,17 @@ static int uffd_seek_pages(struct lazy_pages_info *lpi, __u64 address, int nr)
 static int uffd_handle_pages(struct lazy_pages_info *lpi, __u64 address, int nr, unsigned flags)
 {
 	int ret;
-
+	pr_warn("执行到这\n");
 	ret = uffd_seek_pages(lpi, address, nr);
 	if (ret)
 		return ret;
-
+	pr_warn("执行到这\n");
 	ret = lpi->pr.read_pages(&lpi->pr, address, nr, lpi->buf, flags);
 	if (ret <= 0) {
 		lp_err(lpi, "failed reading pages at %llx\n", address);
 		return ret;
 	}
-
+	
 	return 0;
 }
 
@@ -1030,7 +1041,7 @@ static int xfer_pages(struct lazy_pages_info *lpi)
 
 	update_xfer_len(lpi, false);
 
-	err = uffd_handle_pages(lpi, iov->img_start, nr_pages, PR_ASYNC | PR_ASAP);
+	err = uffd_handle_pages(lpi, iov->img_start, nr_pages, PR_ASAP);
 	if (err < 0) {
 		lp_err(lpi, "Error during UFFD copy\n");
 		return -1;
@@ -1183,7 +1194,8 @@ static int handle_page_fault(struct lazy_pages_info *lpi, struct uffd_msg *msg)
 
 	update_xfer_len(lpi, true);
 
-	ret = uffd_handle_pages(lpi, iov->img_start, 1, PR_ASYNC | PR_ASAP);
+	// ret = uffd_handle_pages(lpi, iov->img_start, 1, PR_ASYNC | PR_ASAP);
+	ret = uffd_handle_pages(lpi, iov->img_start, 1, PR_ASAP);
 	if (ret < 0) {
 		lp_err(lpi, "Error during regular page copy\n");
 		return -1;
@@ -1197,7 +1209,7 @@ static int handle_uffd_event(struct epoll_rfd *lpfd)
 	struct lazy_pages_info *lpi;
 	struct uffd_msg msg;
 	int ret;
-
+	pr_warn("执行到这\n");
 	lpi = container_of(lpfd, struct lazy_pages_info, lpfd);
 
 	ret = read(lpfd->fd, &msg, sizeof(msg));
@@ -1217,7 +1229,7 @@ static int handle_uffd_event(struct epoll_rfd *lpfd)
 		lp_err(lpi, "Can't read uffd message: short read");
 		return -1;
 	}
-
+	pr_warn("执行到这\n");
 	switch (msg.event) {
 	case UFFD_EVENT_PAGEFAULT:
 		return handle_page_fault(lpi, &msg);
@@ -1340,7 +1352,7 @@ static int lazy_sk_read_event(struct epoll_rfd *rfd)
 {
 	uint32_t fin;
 	int ret;
-
+	pr_warn("执行到这\n");
 	ret = recv(rfd->fd, &fin, sizeof(fin), 0);
 	/*
 	 * epoll sets POLLIN | POLLHUP for the EOF case, so we get short

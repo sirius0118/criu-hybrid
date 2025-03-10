@@ -469,8 +469,13 @@ static int maybe_read_page_remote(struct page_read *pr, unsigned long vaddr, int
 
 	/* We always do PR_ASAP mode here (FIXME?) */
 	ret = request_remote_pages(pr->img_id, vaddr, nr);
-	if (!ret)
+	if (!ret){
+		
+		// flags = 0;
 		ret = page_server_start_read(buf, nr, read_page_complete, pr, flags);
+		
+	}
+	
 	return ret;
 }
 
@@ -486,7 +491,7 @@ static int read_pagemap_page(struct page_read *pr, unsigned long vaddr, int nr, 
 		if (pr->maybe_read_page(pr, vaddr, nr, buf, flags) < 0)
 			return -1;
 	}
-
+	pr_warn("执行到这\n");
 	pr->cvaddr += nr * PAGE_SIZE;
 
 	return 1;

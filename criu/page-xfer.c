@@ -137,12 +137,14 @@ static inline u32 decode_ps_flags(u32 cmd)
 
 static inline int __send(int sk, const void *buf, size_t sz, int fl)
 {
-	return opts.tls ? tls_send(buf, sz, fl) : send(sk, buf, sz, fl);
+	// return opts.tls ? tls_send(buf, sz, fl) : send(sk, buf, sz, fl);
+	return rsend(sk, buf, sz, fl);
 }
 
 static inline int __recv(int sk, void *buf, size_t sz, int fl)
 {
-	return opts.tls ? tls_recv(buf, sz, fl) : recv(sk, buf, sz, fl);
+	// return opts.tls ? tls_recv(buf, sz, fl) : recv(sk, buf, sz, fl);
+	return rrecv(sk, buf, sz, fl);
 }
 
 static inline int send_psi_flags(int sk, struct page_server_iov *pi, int flags)
@@ -239,7 +241,7 @@ static int open_page_server_xfer(struct page_xfer *xfer, int fd_type, unsigned l
 	}
 
 	/* Push the command NOW */
-	tcp_nodelay(xfer->sk, true);
+	// tcp_nodelay(xfer->sk, true);
 
 	if (__recv(xfer->sk, &has_parent, 1, 0) != 1) {
 		pr_perror("The page server doesn't answer");
@@ -980,7 +982,7 @@ static int check_parent_server_xfer(int fd_type, unsigned long img_id)
 	if (send_psi(page_server_sk, &pi))
 		return -1;
 
-	tcp_nodelay(page_server_sk, true);
+	// tcp_nodelay(page_server_sk, true);
 
 	if (__recv(page_server_sk, &has_parent, sizeof(int), 0) != sizeof(int)) {
 		pr_perror("The page server doesn't answer");
@@ -1138,6 +1140,7 @@ static int page_server_get_pages(int sk, struct page_server_iov *pi)
 	struct page_pipe *pp;
 	unsigned long len;
 	int ret;
+	char buffer[4096 * 1024];
 
 	item = pstree_item_by_virt(pi->dst_id);
 	pp = dmpi(item)->mem_pp;
@@ -1162,16 +1165,20 @@ static int page_server_get_pages(int sk, struct page_server_iov *pi)
 
 	len = pi->nr_pages * PAGE_SIZE;
 
-	if (opts.tls) {
-		if (tls_send_data_from_fd(pipe_read_dest.p[0], len))
-			return -1;
-	} else {
-		ret = splice(pipe_read_dest.p[0], NULL, sk, NULL, len, SPLICE_F_MOVE);
-		if (ret != len)
-			return -1;
-	}
+	// if (opts.tls) {
+	// 	if (tls_send_data_from_fd(pipe_read_dest.p[0], len))
+	// 		return -1;
+	// } else {
+	// 	ret = splice(pipe_read_dest.p[0], NULL, sk, NULL, len, SPLICE_F_MOVE);
+	// 	if (ret != len)
+	// 		return -1;
+	// }
+	ret = read(pipe_read_dest.p[0], buffer, len);
+	ret = __send(sk, buffer, len, 0);
+	if (ret != len)
+		return -1;
 
-	tcp_nodelay(sk, true);
+	// tcp_nodelay(sk, true);
 
 	return 0;
 }
@@ -1188,7 +1195,7 @@ static int page_server_serve(int sk)
 		 * writes back the has_parent bit from time to time, so
 		 * make it NODELAY all the time.
 		 */
-		tcp_nodelay(sk, true);
+		// tcp_nodelay(sk, true);
 
 		if (pipe(cxfer.p)) {
 			pr_perror("Can't make pipe for xfer");
@@ -1199,14 +1206,15 @@ static int page_server_serve(int sk)
 		cxfer.pipe_size = fcntl(cxfer.p[0], F_GETPIPE_SZ, 0);
 		pr_debug("Created xfer pipe size %u\n", cxfer.pipe_size);
 	} else {
+		
 		pipe_read_dest_init(&pipe_read_dest);
-		tcp_cork(sk, true);
+		// tcp_cork(sk, true);
 	}
-
+	
 	while (1) {
 		struct page_server_iov pi;
 		u32 cmd;
-
+		pr_warn("执行到这\n");
 		ret = __recv(sk, &pi, sizeof(pi), MSG_WAITALL);
 		if (!ret)
 			break;
@@ -1255,6 +1263,7 @@ static int page_server_serve(int sk)
 			 * An answer must be sent back to inform another side,
 			 * that all data were received
 			 */
+			pr_warn("结束\n");
 			if (__send(sk, &status, sizeof(status), 0) != sizeof(status)) {
 				pr_perror("Can't send the final package");
 				ret = -1;
@@ -1283,20 +1292,20 @@ static int page_server_serve(int sk)
 		ret = -1;
 	}
 
-	tls_terminate_session(ret != 0);
+	// tls_terminate_session(ret != 0);
 
-	if (ret == 0 && opts.ps_socket == -1) {
-		char c;
+	// if (ret == 0 && opts.ps_socket == -1) {
+	// 	char c;
 
-		/*
-		 * Wait when a remote side closes the connection
-		 * to avoid TIME_WAIT bucket
-		 */
-		if (read(sk, &c, sizeof(c)) != 0) {
-			pr_perror("Unexpected data");
-			ret = -1;
-		}
-	}
+	// 	/*
+	// 	 * Wait when a remote side closes the connection
+	// 	 * to avoid TIME_WAIT bucket
+	// 	 */
+	// 	if (__recv(sk, &c, sizeof(c), 0) != 0) {
+	// 		pr_perror("Unexpected data");
+	// 		ret = -1;
+	// 	}
+	// }
 
 	page_server_close();
 
@@ -1524,12 +1533,12 @@ int disconnect_from_page_server(void)
 
 	if (send_psi(page_server_sk, &pi))
 		goto out;
-
+	pr_warn("发送结束\n");
 	if (__recv(page_server_sk, &status, sizeof(status), 0) != sizeof(status)) {
 		pr_perror("The page server doesn't answer");
 		goto out;
 	}
-
+	pr_warn("收到结束\n");
 	ret = 0;
 out:
 	tls_terminate_session(ret != 0);
@@ -1577,7 +1586,7 @@ static int page_server_start_async_read(void *buf, int nr_pages, ps_async_read_c
 	ar = xmalloc(sizeof(*ar));
 	if (ar == NULL)
 		return -1;
-
+	pr_warn("执行到这\n");
 	init_ps_async_read(ar, buf, nr_pages, complete, priv);
 	list_add_tail(&ar->l, &async_reads);
 	return 0;
@@ -1609,7 +1618,7 @@ static int page_server_read(struct ps_async_read *ar, int flags)
 		buf = ar->pages + (ar->rb - sizeof(ar->pi));
 		need = ar->goal - ar->rb;
 	}
-
+	
 	ret = __recv(page_server_sk, buf, need, flags);
 	if (ret < 0) {
 		if (flags == MSG_DONTWAIT && (errno == EAGAIN || errno == EINTR)) {
@@ -1623,7 +1632,7 @@ static int page_server_read(struct ps_async_read *ar, int flags)
 	ar->rb += ret;
 	if (ar->rb < ar->goal)
 		return 1;
-
+	
 	/*
 	 * IO complete -- notify the caller and drop the request
 	 */
@@ -1636,6 +1645,7 @@ static int page_server_async_read(struct epoll_rfd *f)
 	struct ps_async_read *ar;
 	int ret;
 
+	pr_warn("执行到这\n");
 	BUG_ON(list_empty(&async_reads));
 	ar = list_first_entry(&async_reads, struct ps_async_read, l);
 	ret = page_server_read(ar, MSG_DONTWAIT);
@@ -1662,7 +1672,7 @@ int connect_to_page_server_to_recv(int epfd)
 {
 	if (connect_to_page_server())
 		return -1;
-
+	pr_warn("执行到这:%p\n", page_server_async_read);
 	ps_rfd.fd = page_server_sk;
 	ps_rfd.read_event = page_server_async_read;
 	ps_rfd.hangup_event = page_server_hangup_event;
@@ -1680,10 +1690,10 @@ int request_remote_pages(unsigned long img_id, unsigned long addr, int nr_pages)
 	};
 
 	/* XXX: why MSG_DONTWAIT here? */
-	if (send_psi_flags(page_server_sk, &pi, MSG_DONTWAIT))
+	if (send_psi_flags(page_server_sk, &pi, 0))
 		return -1;
-
-	tcp_nodelay(page_server_sk, true);
+	
+	// tcp_nodelay(page_server_sk, true);
 	return 0;
 }
 
@@ -1691,10 +1701,10 @@ static int page_server_start_sync_read(void *buf, int nr, ps_async_read_complete
 {
 	struct ps_async_read ar;
 	int ret = 1;
-
+	
 	init_ps_async_read(&ar, buf, nr, complete, priv);
 	while (ret == 1)
-		ret = page_server_read(&ar, MSG_WAITALL);
+		ret = page_server_read(&ar, 0);
 	return ret;
 }
 
