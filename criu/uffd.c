@@ -14,6 +14,7 @@
 #include <sys/un.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <rdma/rsocket.h>
 
 #include "linux/userfaultfd.h"
 
@@ -1447,7 +1448,7 @@ int cr_lazy_pages(bool daemon)
 
 	if (prepare_dummy_pstree())
 		return -1;
-
+	// 这里与 restorer 创建一个 unix socket
 	lazy_sk = prepare_lazy_socket();
 	if (lazy_sk < 0)
 		return -1;
@@ -1489,7 +1490,7 @@ int cr_lazy_pages(bool daemon)
 		xfree(events);
 		return -1;
 	}
-
+	// 这里连接到 page server
 	if (opts.use_page_server) {
 		if (connect_to_page_server_to_recv(epollfd)) {
 			xfree(events);
@@ -1497,6 +1498,7 @@ int cr_lazy_pages(bool daemon)
 		}
 	}
 
+	// 这里进行 PF、TS等client end的服务
 	ret = handle_requests(epollfd, &events, nr_fds);
 
 	disconnect_from_page_server();

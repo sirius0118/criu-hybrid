@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <rdma/rsocket.h>
 
 #undef LOG_PREFIX
 #define LOG_PREFIX "page-xfer: "
@@ -1424,8 +1425,9 @@ int cr_page_server(bool daemon_mode, bool lazy_dump, int cfd)
 		pr_info("Reusing ps socket %d\n", ask);
 		goto no_server;
 	}
-
-	sk = setup_tcp_server("page", opts.addr, &opts.port);
+	// 创建一个用于 Page Server与 Page Client通信的socket
+	// sk = setup_tcp_server("page", opts.addr, &opts.port);
+	sk = setup_rdma_server("page", opts.addr, &opts.port);
 	if (sk == -1)
 		return -1;
 no_server:
@@ -1441,15 +1443,16 @@ no_server:
 			exit(1);
 		}
 	}
-
-	ret = run_tcp_server(daemon_mode, &ask, cfd, sk);
+	// 返回 accept 之后的 ask
+	// ret = run_tcp_server(daemon_mode, &ask, cfd, sk);
+	ret = run_rdma_server(daemon_mode, &ask, cfd, sk);
 	if (ret != 0)
 		return ret > 0 ? 0 : -1;
 
-	if (tls_x509_init(ask, true)) {
-		close_safe(&sk);
-		return -1;
-	}
+	// if (tls_x509_init(ask, true)) {
+	// 	close_safe(&sk);
+	// 	return -1;
+	// }
 
 	if (ask >= 0)
 		ret = page_server_serve(ask);
@@ -1468,24 +1471,25 @@ static int connect_to_page_server(void)
 	if (opts.ps_socket != -1) {
 		page_server_sk = opts.ps_socket;
 		pr_info("Reusing ps socket %d\n", page_server_sk);
-		goto out;
+		return -1;
 	}
 
-	page_server_sk = setup_tcp_client(opts.addr);
+	// page_server_sk = setup_tcp_client(opts.addr);
+	page_server_sk = setup_rdma_client(opts.addr);
 	if (page_server_sk == -1)
 		return -1;
 
-	if (tls_x509_init(page_server_sk, false)) {
-		close(page_server_sk);
-		return -1;
-	}
-out:
-	/*
-	 * CORK the socket at the very beginning. As per ANK
-	 * the corked by default socket with sporadic NODELAY-s
-	 * on urgent data is the smartest mode ever.
-	 */
-	tcp_cork(page_server_sk, true);
+// 	if (tls_x509_init(page_server_sk, false)) {
+// 		close(page_server_sk);
+// 		return -1;
+// 	}
+// out:
+// 	/*
+// 	 * CORK the socket at the very beginning. As per ANK
+// 	 * the corked by default socket with sporadic NODELAY-s
+// 	 * on urgent data is the smartest mode ever.
+// 	 */
+// 	tcp_cork(page_server_sk, true);
 	return 0;
 }
 
