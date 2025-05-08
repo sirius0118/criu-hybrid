@@ -2235,6 +2235,9 @@ int cr_dump_tasks(pid_t pid)
 			pr_perror("Unable to wait %d", fork_pid);
 			goto err;
 		}
+		// 睡眠五秒模拟加载时间
+		sleep(4);
+
 	}
 
 	// -------------------------------- Post copy --------------------------------------
@@ -2318,7 +2321,7 @@ int cr_dump_tasks(pid_t pid)
 	sprintf(path, "%s/stop", opts.imgs_dir);
 	fp = fopen(path, "w");
 	fclose(fp);
-	
+
 	if (collect_pstree())
 		goto err;
 
